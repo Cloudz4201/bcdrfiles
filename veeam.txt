@@ -1,0 +1,70 @@
+# PowerShell Script to Collect Information and Save it as JSON
+
+function Check-BackupSoftwareInstalled {
+    param ([string]$softwareName)
+    $softwarePattern = "*$softwareName*"
+    $installed = (Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\* | Where-Object { $_.DisplayName -like $softwarePattern }) -ne $null
+    return $installed
+}
+
+function Get-VeeamLastBackupStatus {
+    try {
+        Connect-VBRServer -Server "localhost" -User "veamps" -Password "EPrX11y_-0HAkJ3" -ErrorAction Stop
+        $lastBackupSession = Get-VBRBackupSession | Sort-Object -Property CreationTime -Descending | Select-Object -First 1
+        Disconnect-VBRServer
+        return $lastBackupSession
+    } catch {
+        Write-Host "Error connecting to Veeam server or retrieving backup session"
+        return $null
+    }
+}
+
+$backupProduct = ""
+$veeamStatus = $null
+if (Check-BackupSoftwareInstalled -softwareName "Veeam") {
+    $backupProduct = "Veeam"
+    $veeamStatus = Get-VeeamLastBackupStatus
+}
+
+$currentTime = Get-Date -Format "MM/dd/yyyy hh:mm tt -1300"
+
+function CheckBackupStatus($backupSession) {
+    if ($backupSession) {
+        return @{
+            isSuccess = $backupSession.IsSuccess.ToString()
+            isWarning = $backupSession.IsWarning.ToString()
+            isFailure = $backupSession.IsFailure.ToString()
+        }
+    } else {
+        return @{
+            isSuccess = "Unknown"
+            isWarning = "Unknown"
+            isFailure = "Unknown"
+        }
+    }
+}
+
+$backupStatus = CheckBackupStatus -backupSession $veeamStatus
+
+$info = @{
+   'Client Name'  = 'O"Neill Group'
+    time = if ($veeamStatus) { $veeamStatus.CreationTime.ToString() } else { "No recent successful backup found." }
+    splog = if ($veeamStatus) { $veeamStatus.JobName } else { "No Job Name" }
+    eventid = if ($veeamStatus) { $veeamStatus.Result.ToString() } else { "No Result" }
+    type = $backupProduct
+    device = [System.Net.Dns]::GetHostName()
+    lastupdated = $currentTime
+}
+
+$json = $info | ConvertTo-Json
+Set-Content -Path "C:\Temp\output.json" -Value $json
+
+Write-Host "Output.json Has been updated!"
+
+$executablePath = "C:\Temp\updater.exe"
+
+if (Test-Path $executablePath) {
+    Start-Process $executablePath
+} else {
+    Write-Host "Executable not found: $executablePath"
+}
